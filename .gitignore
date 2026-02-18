@@ -21,7 +21,7 @@ wheels/
 *.egg
 MANIFEST
 
-# Virtual Environment
+# Virtual Environment - COMPLETE EXCLUSION
 .venv/
 venv/
 ENV/
