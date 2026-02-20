@@ -29,10 +29,23 @@ const TransferProgress = ({ transfers, onRemove }) => {
     }
   }
 
+  const getProtocolBadgeClasses = (status) => {
+    switch (status) {
+      case 'completed':
+        return 'bg-green-100 text-green-700 border-green-200'
+      case 'active':
+        return 'bg-blue-100 text-blue-700 border-blue-200'
+      case 'error':
+        return 'bg-red-100 text-red-700 border-red-200'
+      default:
+        return 'bg-gray-100 text-gray-600 border-gray-200'
+    }
+  }
+
   if (transfers.length === 0) return null
 
   return (
-    <div className="fixed bottom-4 right-4 max-w-sm space-y-2 z-50">
+    <div className="fixed bottom-4 right-4 max-w-md space-y-2 z-50">
       {transfers.map((transfer) => (
         <div
           key={transfer.id}
@@ -60,7 +73,7 @@ const TransferProgress = ({ transfers, onRemove }) => {
           {transfer.status === 'uploading' && (
             <div className="space-y-2">
               <div className="flex items-center justify-between text-xs text-gray-600">
-                <span>Uploading...</span>
+                <span>{transfer.stage ? `Stage: ${transfer.stage}` : 'Uploading...'}</span>
                 <span>{Math.round(transfer.progress || 0)}%</span>
               </div>
               
@@ -69,6 +82,44 @@ const TransferProgress = ({ transfers, onRemove }) => {
                   className="h-full bg-blue-600 rounded-full transition-all duration-300 ease-out"
                   style={{ width: `${transfer.progress || 0}%` }}
                 />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 pt-1">
+                <div className="rounded border border-gray-200 bg-white p-2">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[11px] font-semibold text-gray-700">UDP Discovery</span>
+                    <span className={clsx(
+                      'text-[10px] px-2 py-0.5 rounded border',
+                      getProtocolBadgeClasses(transfer.udpStatus)
+                    )}>
+                      {transfer.udpStatus || 'pending'}
+                    </span>
+                  </div>
+                  <div className="w-full bg-gray-200 rounded-full h-1.5 overflow-hidden">
+                    <div
+                      className="h-full bg-cyan-500 rounded-full transition-all duration-300 ease-out"
+                      style={{ width: `${transfer.udpProgress || 0}%` }}
+                    />
+                  </div>
+                </div>
+
+                <div className="rounded border border-gray-200 bg-white p-2">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[11px] font-semibold text-gray-700">TCP Upload</span>
+                    <span className={clsx(
+                      'text-[10px] px-2 py-0.5 rounded border',
+                      getProtocolBadgeClasses(transfer.tcpStatus)
+                    )}>
+                      {transfer.tcpStatus || 'pending'}
+                    </span>
+                  </div>
+                  <div className="w-full bg-gray-200 rounded-full h-1.5 overflow-hidden">
+                    <div
+                      className="h-full bg-blue-600 rounded-full transition-all duration-300 ease-out"
+                      style={{ width: `${transfer.tcpProgress || 0}%` }}
+                    />
+                  </div>
+                </div>
               </div>
               
               {transfer.message && (

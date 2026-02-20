@@ -12,6 +12,11 @@ import time
 import json
 from datetime import datetime
 
+# Use simple file-based storage for now (MongoDB requires installation)
+from simple_db import get_database
+print("[Server] Using file-based storage")
+db = get_database()
+
 # Configuration
 UDP_DISCOVERY_PORT = 8888
 TCP_BASE_PORT = 9000
@@ -81,6 +86,7 @@ class FileTransferServer:
             received_bytes = 0
             start_time = time.time()
             last_progress = 0
+            file_content = b''
             
             # Create unique filename
             base_name = os.path.basename(filename)
@@ -93,6 +99,7 @@ class FileTransferServer:
                     if not chunk:
                         break
                     f.write(chunk)
+                    file_content += chunk
                     received_bytes += len(chunk)
                     
                     # Progress reporting
@@ -103,6 +110,38 @@ class FileTransferServer:
             
             transfer_time = time.time() - start_time
             speed = (filesize / transfer_time / 1024) if transfer_time > 0 else 0
+            
+            # Save file to database
+            try:
+                # Try to decode content as text, fallback to binary representation
+                try:
+                    text_content = file_content.decode('utf-8')
+                except UnicodeDecodeError:
+                    text_content = f"[Binary file - {filesize} bytes]"
+                
+                db_file = db.save_file(
+                    filename=save_name,
+                    content=text_content,
+                    filesize=filesize,
+                    client_address=str(client_addr)
+                )
+                print(f"[Database] File saved to MongoDB: {db_file['_id']}")
+            except Exception as e:
+                print(f"[Database Error] Failed to save file: {e}")
+            
+            # Save transfer record to database
+            try:
+                db_transfer = db.save_transfer(
+                    client_address=str(client_addr),
+                    filename=filename,
+                    filesize=filesize,
+                    transfer_time=transfer_time,
+                    speed_kbps=speed,
+                    status='success'
+                )
+                print(f"[Database] Transfer record saved: {db_transfer['_id']}")
+            except Exception as e:
+                print(f"[Database Error] Failed to save transfer: {e}")
             
             # Log transfer (thread-safe)
             with self.lock:
@@ -128,6 +167,20 @@ class FileTransferServer:
             
         except Exception as e:
             print(f"[TCP Error] {e}")
+            
+            # Save failed transfer to database
+            try:
+                db.save_transfer(
+                    client_address=str(client_addr),
+                    filename=metadata.get('filename', 'unknown'),
+                    filesize=metadata.get('filesize', 0),
+                    transfer_time=0,
+                    speed_kbps=0,
+                    status='failed'
+                )
+            except:
+                pass
+            
             try:
                 error_msg = {'status': 'error', 'message': str(e)}
                 client_socket.send(json.dumps(error_msg).encode())

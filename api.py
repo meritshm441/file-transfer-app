@@ -7,13 +7,18 @@ Modern backend for frontend engineering
 from flask import Flask, jsonify, send_from_directory, request
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
-import glob
 import os
 import time
 from datetime import datetime
 import threading
 import subprocess
 import sys
+import uuid
+
+# Use simple file-based storage for now (MongoDB requires installation)
+from simple_db import get_database
+print("[API] Using file-based storage")
+db = get_database()
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'file-transfer-secret'
@@ -21,28 +26,27 @@ CORS(app)
 socketio = SocketIO(app, cors_allowed_origins="*")
 
 def get_received_files():
-    """Get list of received files with metadata"""
-    files = []
-    for filepath in glob.glob('received_*.txt'):
-        try:
-            stat = os.stat(filepath)
-            with open(filepath, 'r', encoding='utf-8') as f:
-                content = f.read()
-            
-            files.append({
-                'id': filepath,
-                'name': filepath,
-                'size': stat.st_size,
-                'modified': datetime.fromtimestamp(stat.st_mtime).isoformat(),
-                'content': content,
-                'lines': len(content.splitlines()),
-                'preview': content[:200] + '...' if len(content) > 200 else content
+    """Get list of received files from MongoDB"""
+    try:
+        files = db.get_files(limit=50)
+        # Convert to format expected by frontend
+        formatted_files = []
+        for file in files:
+            formatted_files.append({
+                'id': file['_id'],
+                'name': file['filename'],
+                'size': file['size'],
+                'modified': file['upload_date'],
+                'content': file['content'],
+                'lines': file['lines'],
+                'preview': file['content'][:200] + '...' if len(file['content']) > 200 else file['content'],
+                'file_type': file.get('file_type', 'unknown'),
+                'client_address': file.get('client_address')
             })
-        except Exception as e:
-            print(f"Error reading {filepath}: {e}")
-    
-    files.sort(key=lambda x: x['modified'], reverse=True)
-    return files
+        return formatted_files
+    except Exception as e:
+        print(f"Error getting files from database: {e}")
+        return []
 
 @app.route('/api/files')
 def api_files():
@@ -55,21 +59,22 @@ def api_files():
 @app.route('/api/files/<filename>')
 def api_file_detail(filename):
     """Get detailed file info"""
-    if filename.startswith('received_') and filename.endswith('.txt'):
-        try:
-            with open(filename, 'r', encoding='utf-8') as f:
-                content = f.read()
-            stat = os.stat(filename)
+    try:
+        file = db.get_file_by_name(filename)
+        if file:
             return jsonify({
-                'name': filename,
-                'size': stat.st_size,
-                'modified': datetime.fromtimestamp(stat.st_mtime).isoformat(),
-                'content': content,
-                'lines': len(content.splitlines())
+                'id': file['_id'],
+                'name': file['filename'],
+                'size': file['size'],
+                'modified': file['upload_date'],
+                'content': file['content'],
+                'lines': file['lines'],
+                'file_type': file.get('file_type', 'unknown'),
+                'client_address': file.get('client_address')
             })
-        except Exception as e:
-            return jsonify({'error': str(e)}), 404
-    return jsonify({'error': 'File not found'}), 404
+        return jsonify({'error': 'File not found'}), 404
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/upload', methods=['POST'])
 def upload_file():
@@ -86,24 +91,101 @@ def upload_file():
         temp_filename = f"temp_upload_{int(time.time())}.txt"
         file.save(temp_filename)
         
-        # Get server info (assume localhost:9000 for demo)
-        server_ip = '127.0.0.1'
-        server_port = 9000
-        
         # Start transfer in background thread with progress tracking
         def transfer_with_progress():
+            temp_path = temp_filename
+            transfer_id = str(uuid.uuid4())
+
+            def emit_progress(protocol, stage, progress, message):
+                if protocol == 'udp':
+                    overall_progress = round(progress * 0.2, 2)
+                else:
+                    overall_progress = round(20 + (progress * 0.8), 2)
+
+                socketio.emit('transfer_progress', {
+                    'transfer_id': transfer_id,
+                    'filename': file.filename,
+                    'protocol': protocol,
+                    'stage': stage,
+                    'progress': progress,
+                    'overall_progress': min(overall_progress, 100),
+                    'message': message
+                })
+
             try:
                 # Emit start event
                 socketio.emit('transfer_start', {
+                    'transfer_id': transfer_id,
                     'filename': file.filename,
                     'size': os.path.getsize(temp_filename)
                 })
-                
-                # Run client transfer script with progress monitoring
+
+                client_script = os.path.join('src', 'client.py')
+                discovered_servers = []
+
+                # UDP discovery stage
+                emit_progress('udp', 'discovery', 5, 'Starting UDP server discovery...')
+                discover_process = subprocess.Popen(
+                    [sys.executable, client_script, '--discover'],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
+
+                while True:
+                    output = discover_process.stdout.readline()
+                    if output == '' and discover_process.poll() is not None:
+                        break
+                    if not output:
+                        continue
+
+                    line = output.strip()
+                    if not line:
+                        continue
+
+                    if '\t' in line:
+                        parts = line.split('\t')
+                        if len(parts) == 3:
+                            discovered_servers.append({
+                                'name': parts[0],
+                                'address': parts[1],
+                                'tcp_port': int(parts[2])
+                            })
+                    elif '[UDP Discovery]' in line:
+                        if 'Broadcast sent' in line:
+                            progress = 35
+                        elif 'Found server:' in line:
+                            progress = 75
+                        elif 'Found' in line and 'server(s)' in line:
+                            progress = 100
+                        elif 'No servers found' in line:
+                            progress = 100
+                        else:
+                            progress = 15
+
+                        emit_progress('udp', 'discovery', progress, line)
+
+                discover_process.wait()
+
+                if not discovered_servers:
+                    socketio.emit('transfer_error', {
+                        'transfer_id': transfer_id,
+                        'filename': file.filename,
+                        'protocol': 'udp',
+                        'error': 'UDP discovery completed but no transfer server was found.'
+                    })
+                    return
+
+                selected_server = discovered_servers[0]
+                server_ip = selected_server['address']
+                server_port = selected_server['tcp_port']
+                emit_progress('udp', 'discovery', 100, f"Selected server {selected_server['name']} ({server_ip}:{server_port})")
+
+                # Run TCP transfer with progress monitoring
                 client_script = os.path.join('src', 'client.py')
                 process = subprocess.Popen([
                     sys.executable, client_script, '--send', 
-                    server_ip, str(server_port), temp_filename
+                    server_ip, str(server_port), temp_path
                 ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                 
                 # Monitor progress
@@ -112,40 +194,58 @@ def upload_file():
                     if output == '' and process.poll() is not None:
                         break
                     if output:
-                        # Parse progress from client output
-                        if '[TCP Transfer] Progress:' in output:
+                        line = output.strip()
+
+                        # Parse TCP transfer stages from client output
+                        if '[TCP Transfer] Connecting' in line:
+                            emit_progress('tcp', 'connect', 5, line)
+                        elif '[TCP Transfer] Connected' in line:
+                            emit_progress('tcp', 'connect', 15, line)
+                        elif '[TCP Transfer] Starting file upload' in line:
+                            emit_progress('tcp', 'upload', 20, line)
+                        elif '[TCP Transfer] Progress:' in line:
                             try:
-                                progress_part = output.split('Progress:')[1].split('%')[0].strip()
+                                progress_part = line.split('Progress:')[1].split('%')[0].strip()
                                 progress = float(progress_part)
-                                socketio.emit('transfer_progress', {
-                                    'filename': file.filename,
-                                    'progress': progress,
-                                    'message': output.strip()
-                                })
+                                emit_progress('tcp', 'upload', progress, line)
                             except:
                                 pass
-                        elif 'TRANSFER COMPLETE' in output:
+                        elif 'TRANSFER COMPLETE' in line:
+                            emit_progress('tcp', 'complete', 100, 'TCP transfer finished.')
                             socketio.emit('transfer_complete', {
+                                'transfer_id': transfer_id,
                                 'filename': file.filename,
-                                'message': output.strip()
+                                'message': 'UDP discovery and TCP transfer complete.'
                             })
-                        elif '[TCP Transfer Error]' in output:
+                        elif '[TCP Transfer Error]' in line:
                             socketio.emit('transfer_error', {
+                                'transfer_id': transfer_id,
                                 'filename': file.filename,
-                                'error': output.strip()
+                                'protocol': 'tcp',
+                                'error': line
                             })
-                
-                # Clean up
+                            return
+
+                stderr_output = process.stderr.read().strip()
                 process.wait()
-                os.remove(temp_filename)
+
+                if process.returncode != 0:
+                    socketio.emit('transfer_error', {
+                        'transfer_id': transfer_id,
+                        'filename': file.filename,
+                        'protocol': 'tcp',
+                        'error': stderr_output or 'TCP transfer process failed.'
+                    })
                 
             except Exception as e:
                 socketio.emit('transfer_error', {
+                    'transfer_id': transfer_id,
                     'filename': file.filename,
                     'error': str(e)
                 })
-                if os.path.exists(temp_filename):
-                    os.remove(temp_filename)
+            finally:
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
         
         # Start background transfer
         thread = threading.Thread(target=transfer_with_progress, daemon=True)
@@ -162,21 +262,47 @@ def upload_file():
 
 @app.route('/api/download/<filename>')
 def download(filename):
-    """Download a received file"""
-    if filename.startswith('received_') and filename.endswith('.txt'):
-        return send_from_directory('.', filename, as_attachment=True)
-    return jsonify({'error': 'File not found'}), 404
+    """Download a received file from database"""
+    try:
+        file = db.get_file_by_name(filename)
+        if file:
+            # Create temporary file for download
+            import tempfile
+            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as temp_file:
+                temp_file.write(file['content'])
+                temp_path = temp_file.name
+            
+            return send_from_directory(os.path.dirname(temp_path), os.path.basename(temp_path), 
+                                     as_attachment=True, download_name=filename)
+        return jsonify({'error': 'File not found'}), 404
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/stats')
 def api_stats():
-    """Get statistics"""
-    files = get_received_files()
-    return jsonify({
-        'total_files': len(files),
-        'total_size': sum(f['size'] for f in files),
-        'total_lines': sum(f['lines'] for f in files),
-        'last_updated': datetime.now().isoformat()
-    })
+    """Get statistics from database"""
+    try:
+        file_stats = db.get_file_stats()
+        transfer_stats = db.get_transfer_stats()
+        
+        return jsonify({
+            'files': {
+                'total_files': file_stats['total_files'],
+                'total_size': file_stats['total_size'],
+                'total_lines': file_stats['total_lines'],
+                'avg_size': file_stats['avg_size']
+            },
+            'transfers': {
+                'total_transfers': transfer_stats['total_transfers'],
+                'successful_transfers': transfer_stats['successful_transfers'],
+                'total_data': transfer_stats['total_data'],
+                'avg_speed': transfer_stats['avg_speed'],
+                'avg_time': transfer_stats['avg_time']
+            },
+            'last_updated': datetime.now().isoformat()
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @socketio.on('connect')
 def handle_connect():

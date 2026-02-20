@@ -4,9 +4,10 @@ A modern, real-time file transfer monitoring application built with React, Vite,
 
 ## Architecture
 
-### Backend (Flask + Socket.IO)
+### Backend (Flask + Socket.IO + MongoDB)
 - **REST API**: `/api/files`, `/api/stats`, `/api/download/:filename`
 - **Real-time updates**: WebSocket connections for live file monitoring
+- **MongoDB Database**: Persistent storage for files and transfer metadata
 - **File monitoring**: Automatic detection of new `received_*.txt` files
 
 ### Frontend (React + Vite + TailwindCSS)
@@ -15,26 +16,52 @@ A modern, real-time file transfer monitoring application built with React, Vite,
 - **Build system**: Vite for fast development and optimized builds
 - **Icons**: Lucide React for consistent iconography
 
+### Database (MongoDB)
+- **Files Collection**: Store file metadata and content
+- **Transfers Collection**: Track transfer history and statistics
+- **Indexes**: Optimized queries for performance
+
 ## Quick Start
 
 ### Prerequisites
 - Python 3.12.4
 - Node.js 18+
 - npm or yarn
+- MongoDB 6.0+ (local installation or MongoDB Atlas)
 
 ### Backend Setup
 
-1. **Activate virtual environment**
+1. **Install and start MongoDB**
+   ```bash
+   # For local MongoDB
+   mongod
+   
+   # Or use MongoDB Atlas (cloud)
+   # Get connection string and add to .env file
+   ```
+
+2. **Configure environment**
+   ```bash
+   cp .env.example .env
+   # Edit .env with your MongoDB connection string
+   ```
+
+3. **Initialize database**
+   ```bash
+   python init_db.py
+   ```
+
+4. **Activate virtual environment**
    ```bash
    .venv\Scripts\activate
    ```
 
-2. **Install dependencies**
+5. **Install dependencies**
    ```bash
    pip install -r requirements.txt
    ```
 
-3. **Start the API server**
+6. **Start the API server**
    ```bash
    python api.py
    ```
@@ -62,20 +89,23 @@ A modern, real-time file transfer monitoring application built with React, Vite,
 
 ### Real-time Dashboard
 - **Live file monitoring**: Automatic updates when new files arrive
-- **Statistics**: Total files, size, and line counts
+- **Enhanced statistics**: File metrics, transfer analytics, success rates
 - **WebSocket connection**: Live status indicator
+- **MongoDB persistence**: Data survives server restarts
 
 ### File Management
-- **File cards**: Modern card-based UI for each received file
+- **Database storage**: Files stored in MongoDB with metadata
+- **Advanced search**: Filter by file type, client, date range
 - **Content preview**: Toggle between preview and full content
 - **Download functionality**: Direct file downloads
-- **Metadata display**: Size, lines, and modification timestamps
+- **Transfer tracking**: Complete transfer history with performance metrics
 
 ### Modern UI/UX
 - **Responsive design**: Works on desktop and mobile
 - **Glass morphism**: Modern translucent card effects
 - **Smooth animations**: Hover effects and transitions
 - **Loading states**: Professional loading indicators
+- **Enhanced stats**: 6 comprehensive metrics cards
 
 ## API Endpoints
 
@@ -95,11 +125,17 @@ A modern, real-time file transfer monitoring application built with React, Vite,
 
 ### Running Tests
 ```bash
+# Initialize database first
+python init_db.py
+
 # Test file transfer functionality
 python test.py
 
 # Test API endpoints
 curl http://localhost:5001/api/files
+
+# Test database operations
+python -c "from database import db; print('Database connection:', db.client.admin.command('ping'))"
 ```
 
 ### Building for Production
@@ -113,6 +149,9 @@ npm run build
 file-transfer-app/
 ├── api.py                 # Flask API server
 ├── server.py              # Original file transfer server
+├── database.py            # MongoDB models and connection
+├── init_db.py            # Database initialization script
+├── .env.example          # Environment variables template
 ├── src/client.py          # File transfer client
 ├── test.py                # Test script
 ├── frontend/              # React frontend
@@ -126,13 +165,19 @@ file-transfer-app/
 └── requirements.txt      # Python dependencies
 ```
 
-## Technology Stack
+### Technology Stack
 
 ### Backend
 - **Flask**: Web framework
 - **Flask-CORS**: Cross-origin resource sharing
 - **Flask-SocketIO**: WebSocket support
+- **PyMongo**: MongoDB driver
 - **Python 3.12.4**: Runtime environment
+
+### Database
+- **MongoDB**: NoSQL document database
+- **Indexes**: Optimized query performance
+- **Aggregation**: Advanced statistics and analytics
 
 ### Frontend
 - **React 18**: UI library

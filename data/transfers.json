@@ -1,0 +1,12 @@
+[
+  {
+    "_id": "transfer_1_1771572590",
+    "client_address": "('192.168.1.4', 59540)",
+    "filename": "test_file.txt",
+    "size": 1143,
+    "transfer_time": 0.0052564144134521484,
+    "speed_kbps": 212.35215675602123,
+    "status": "success",
+    "transfer_date": "2026-02-20T07:29:50.490106"
+  }
+]

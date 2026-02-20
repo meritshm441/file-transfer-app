@@ -9,7 +9,10 @@ import TransferProgress from './components/TransferProgress'
 
 function App() {
   const [files, setFiles] = useState([])
-  const [stats, setStats] = useState({ total_files: 0, total_size: 0, total_lines: 0 })
+  const [stats, setStats] = useState({ 
+    files: { total_files: 0, total_size: 0, total_lines: 0, avg_size: 0 },
+    transfers: { total_transfers: 0, successful_transfers: 0, total_data: 0, avg_speed: 0, avg_time: 0 }
+  })
   const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
   const [socket, setSocket] = useState(null)
@@ -36,10 +39,16 @@ function App() {
     // Transfer progress events
     newSocket.on('transfer_start', (data) => {
       const newTransfer = {
-        id: Date.now(),
+        id: data.transfer_id || Date.now(),
         filename: data.filename,
         size: data.size,
         progress: 0,
+        udpProgress: 0,
+        tcpProgress: 0,
+        udpStatus: 'active',
+        tcpStatus: 'pending',
+        protocol: 'udp',
+        stage: 'discovery',
         status: 'uploading',
         message: 'Starting transfer...'
       }
@@ -48,31 +57,62 @@ function App() {
 
     newSocket.on('transfer_progress', (data) => {
       setTransfers(prev => prev.map(transfer => 
-        transfer.filename === data.filename 
-          ? { ...transfer, progress: data.progress, message: data.message }
+        (transfer.id === data.transfer_id || transfer.filename === data.filename)
+          ? {
+              ...transfer,
+              progress: data.overall_progress ?? transfer.progress,
+              protocol: data.protocol || transfer.protocol,
+              stage: data.stage || transfer.stage,
+              message: data.message || transfer.message,
+              udpProgress: data.protocol === 'udp' ? (data.progress ?? transfer.udpProgress) : transfer.udpProgress,
+              tcpProgress: data.protocol === 'tcp' ? (data.progress ?? transfer.tcpProgress) : transfer.tcpProgress,
+              udpStatus: data.protocol === 'udp'
+                ? ((data.progress ?? 0) >= 100 ? 'completed' : 'active')
+                : transfer.udpStatus,
+              tcpStatus: data.protocol === 'tcp'
+                ? ((data.progress ?? 0) >= 100 ? 'completed' : 'active')
+                : transfer.tcpStatus
+            }
           : transfer
       ))
     })
 
     newSocket.on('transfer_complete', (data) => {
       setTransfers(prev => prev.map(transfer => 
-        transfer.filename === data.filename 
-          ? { ...transfer, progress: 100, status: 'completed', message: data.message }
+        (transfer.id === data.transfer_id || transfer.filename === data.filename)
+          ? {
+              ...transfer,
+              progress: 100,
+              udpProgress: 100,
+              tcpProgress: 100,
+              udpStatus: 'completed',
+              tcpStatus: 'completed',
+              status: 'completed',
+              stage: 'complete',
+              message: data.message
+            }
           : transfer
       ))
       
-      // Remove completed transfers after 3 seconds
+      // Remove completed transfers after 6 seconds
       setTimeout(() => {
         setTransfers(prev => prev.filter(transfer => 
-          !(transfer.filename === data.filename && transfer.status === 'completed')
+          !((transfer.id === data.transfer_id || transfer.filename === data.filename) && transfer.status === 'completed')
         ))
-      }, 3000)
+      }, 6000)
     })
 
     newSocket.on('transfer_error', (data) => {
       setTransfers(prev => prev.map(transfer => 
-        transfer.filename === data.filename 
-          ? { ...transfer, status: 'error', error: data.error }
+        (transfer.id === data.transfer_id || transfer.filename === data.filename)
+          ? {
+              ...transfer,
+              status: 'error',
+              protocol: data.protocol || transfer.protocol,
+              udpStatus: data.protocol === 'udp' ? 'error' : transfer.udpStatus,
+              tcpStatus: data.protocol === 'tcp' ? 'error' : transfer.tcpStatus,
+              error: data.error
+            }
           : transfer
       ))
     })
@@ -150,24 +190,43 @@ function App() {
         <FileUpload onUpload={handleFileUpload} loading={uploading} />
         
         {/* Stats Section */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8 mt-8">
+        <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-8 mt-8">
           <StatsCard
             title="Total Files"
-            value={stats.total_files}
+            value={stats.files.total_files}
             icon={<FolderOpen className="w-6 h-6" />}
             color="blue"
           />
           <StatsCard
             title="Total Size"
-            value={formatBytes(stats.total_size)}
+            value={formatBytes(stats.files.total_size)}
             icon={<HardDrive className="w-6 h-6" />}
             color="green"
           />
           <StatsCard
             title="Total Lines"
-            value={stats.total_lines.toLocaleString()}
+            value={stats.files.total_lines.toLocaleString()}
             icon={<FileTextIcon className="w-6 h-6" />}
             color="purple"
+          />
+          <StatsCard
+            title="Avg File Size"
+            value={formatBytes(stats.files.avg_size)}
+            icon={<HardDrive className="w-6 h-6" />}
+            color="yellow"
+          />
+          <StatsCard
+            title="Total Transfers"
+            value={stats.transfers.total_transfers}
+            icon={<RefreshCw className="w-6 h-6" />}
+            color="indigo"
+          />
+          <StatsCard
+            title="Success Rate"
+            value={`${stats.transfers.total_transfers > 0 ? 
+              Math.round((stats.transfers.successful_transfers / stats.transfers.total_transfers) * 100) : 0}%`}
+            icon={<FileText className="w-6 h-6" />}
+            color="emerald"
           />
         </div>
 
